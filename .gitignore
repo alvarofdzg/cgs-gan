@@ -3,3 +3,7 @@ out
 training-runs
 .idea
 **/__pycache__/**
+
+training-results
+training_alvaro
+test_discriminator

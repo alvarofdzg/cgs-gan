@@ -1,0 +1,29 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Debug Training",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "train.py",
+            "console": "integratedTerminal",
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "3,4,5,6"
+            },
+            "args": [
+                "--data=/data1/datasets/dataset_alvaro/segmented_images/synthesisai",
+                // "--data=/data1/users/alvaro/cgs-gan_dataset/FFHQC/512",
+                // "--outdir=./training_alvaro"
+                // "--gpus=4"
+                // "--resume=/data1/users/alvaro/cgs-gan_dataset/ffhq_512.pkl"
+            ]
+        },
+    ]
+}

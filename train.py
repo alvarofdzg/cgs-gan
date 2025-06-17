@@ -18,6 +18,7 @@ and
 and
 "GSGAN"
 """
+import os
 import click
 import dnnlib
 from metrics import metric_main
@@ -102,7 +103,14 @@ def main(**kwargs):
 
     # Training Data
     c.data_loader_kwargs = dnnlib.EasyDict(pin_memory=True, prefetch_factor=2)
-    c.training_set_kwargs, dataset_name = init_dataset_kwargs(class_name="training.dataset.ImageFolderDataset", data=opts.data, cam_sample_mode=opts.cam_sample_mode)
+    
+    if os.path.basename(kwargs["data"]) == "synthesisai":
+        # c.training_set_kwargs, dataset_name = init_dataset_kwargs(class_name="training.dataset.ImageFolderDatasetNersemble", data=opts.data, cam_sample_mode=opts.cam_sample_mode)
+        # c.training_set_kwargs, dataset_name = init_dataset_kwargs(class_name="training.dataset.ImageFolderDataset4", data=opts.data, cam_sample_mode=opts.cam_sample_mode)
+        # c.training_set_kwargs, dataset_name = init_dataset_kwargs(class_name="training.dataset.ImageFolderDataset3", data=opts.data, cam_sample_mode=opts.cam_sample_mode)
+        c.training_set_kwargs, dataset_name = init_dataset_kwargs(class_name="training.dataset.ImageFolderDataset2", data=opts.data, cam_sample_mode=opts.cam_sample_mode)
+    else:
+        c.training_set_kwargs, dataset_name = init_dataset_kwargs(class_name="training.dataset.ImageFolderDataset", data=opts.data, cam_sample_mode=opts.cam_sample_mode)
     if opts.cond and not c.training_set_kwargs.use_labels:
         raise click.ClickException("--cond=True requires labels specified in dataset.json")
     c.training_set_kwargs.use_labels = opts.cond
@@ -167,10 +175,10 @@ def main(**kwargs):
     # Resume.
     if opts.resume is not None:
         c.resume_pkl = opts.resume
-        c.resume_kimg = opts.resume_kimg
-        c.ema_rampup = None # Disable EMA rampup.
-        if not opts.resume_blur:
-            c.loss_kwargs.blur_init_sigma = 0
+        # c.resume_kimg = opts.resume_kimg
+        # c.ema_rampup = None # Disable EMA rampup.
+        # if not opts.resume_blur:
+        #     c.loss_kwargs.blur_init_sigma = 0
 
     # Performance-related toggles.
     c.D_kwargs.num_fp16_res = opts.d_num_fp16_res

@@ -15,7 +15,6 @@ import load_network
 from metrics import metric_main
 from training.training_utils import save_image_grid, setup_snapshot_image_grid
 
-
 def training_loop(
         run_dir='.',                # Output directory.
         training_set_kwargs={},     # Options for training set.
@@ -193,13 +192,13 @@ def training_loop(
             phase.start_event = torch.cuda.Event(enable_timing=True)
             phase.end_event = torch.cuda.Event(enable_timing=True)
 
-    if (resume_pkl is not None) and (rank == 0):
-        with dnnlib.util.open_url(resume_pkl) as f:
-            resume_data = load_network.load_network_pkl(f)
-        print("loading optimizer states")
-        for phase in phases:
-            phase.opt.load_state_dict(resume_data[f"{phase.name}_opt"])
-            phase.interval = resume_data[f"{phase.name}_interval"]
+    # if (resume_pkl is not None) and (rank == 0):
+    #     with dnnlib.util.open_url(resume_pkl) as f:
+    #         resume_data = load_network.load_network_pkl(f)
+    #     print("loading optimizer states")
+    #     for phase in phases:
+    #         phase.opt.load_state_dict(resume_data[f"{phase.name}_opt"])
+    #         phase.interval = resume_data[f"{phase.name}_interval"]
 
     # Export sample images.
     grid_size = None
@@ -265,9 +264,12 @@ def training_loop(
             # Accumulate gradients.
             phase.opt.zero_grad(set_to_none=True)
             phase.module.requires_grad_(True)
-            for real_img, real_c, gen_z, gen_c in zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c):
+            for idx, (real_img, real_c, gen_z, gen_c) in enumerate(zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c)):
+            # for real_img, real_c, gen_z, gen_c in zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c):
                 loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg,
                                           logger=logger)
+                # print("Rank:", rank, ", Idx:", idx, ", Phase:", phase.name)
+                # breakpoint
             phase.module.requires_grad_(False)
 
             # Update weights.

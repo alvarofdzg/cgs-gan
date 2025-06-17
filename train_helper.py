@@ -10,6 +10,9 @@ import dnnlib
 from training import training_loop
 from torch_utils import custom_ops, training_stats
 
+# import cProfile
+# import pstats
+
 
 def subprocess_fn(rank, c, temp_dir):
     dnnlib.util.Logger(file_name=os.path.join(c.run_dir, 'log.txt'), file_mode='a', should_flush=True)
@@ -32,8 +35,11 @@ def subprocess_fn(rank, c, temp_dir):
         custom_ops.verbosity = 'none'
 
     # Execute training loop.
+    # with cProfile.Profile() as pr:
     training_loop.training_loop(rank=rank, **c)
-
+    # results = pstats.Stats(pr)
+    # results.dump_stats('prof_training_loop.prof')
+    
 
 def launch_training(c, desc, outdir):
     dnnlib.util.Logger(should_flush=True)

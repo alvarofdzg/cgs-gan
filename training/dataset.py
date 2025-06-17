@@ -12,6 +12,7 @@
 
 import os
 import re
+# from utils.io import read_file
 
 import cv2
 import numpy as np
@@ -19,7 +20,6 @@ import zipfile
 import PIL.Image
 import json
 import torch
-from tqdm import tqdm
 import dnnlib
 import pyspng
 
@@ -285,3 +285,703 @@ class ImageFolderDataset(Dataset):
             cam_labels[key] = np.array(cam_labels[key], dtype=np.float32)
         return cam_labels
 
+
+class ImageFolderDataset2(Dataset):
+    def __init__(
+        self,
+        path,
+        resolution=None,
+        camera_sample_mode=None,
+        rand_background=True,
+        **super_kwargs,
+    ):
+        self._path = path
+        self._zipfile = None
+        self.rand_background = rand_background
+
+        self.mask_images = "/data1/datasets/dataset_alvaro/segmentation/synthesisai"
+        self.theta = [theta for theta in range(0, 360, 30)]
+        # self.theta = [theta for theta in range(0, 120, 30)] + [theta for theta in range(270, 360, 30)]
+        # self.theta = [theta for theta in range(0, 90, 30)] + [theta for theta in range(300, 360, 30)]
+        # self.theta = [0, 30, 60, 300, 330]
+        # self.azimuth = [0]
+        self.azimuth = [0, 25, 335]
+        # self.expressions = ["neutral"]
+        self.expressions = ["neutral", "happy", "scared"]
+        # self.subjects_ids = [1]
+        self.subjects_ids = [idx for idx in range(1, 301)]
+
+        self._image_fnames = []
+        for cur_subject_id in self.subjects_ids:
+            for cur_expression in self.expressions:
+                for cur_azimuth in self.azimuth:
+                    for cur_theta in self.theta:
+                        self._image_fnames.append(
+                            os.path.join(
+                                self._path,
+                                "subject_{:01d}__{}__azimuth_{:01d}__theta_{:01d}.npy".format(cur_subject_id, cur_expression, cur_azimuth, cur_theta),
+                            )
+                        )
+                        
+        self._type = "dir"
+        
+        self.labels = self._load_raw_labels()
+        all_labels = np.array([label for label in self.labels.values()])
+        self._raw_labels_std = all_labels.std(0)
+
+        PIL.Image.init()
+
+        print("Images in directory:", len(self._image_fnames))
+
+        if len(self._image_fnames) == 0:
+            raise IOError("No image files found in the specified path")
+         
+        name = os.path.splitext(os.path.basename(self._path))[0]
+        raw_shape = [len(self._image_fnames)] + list(self._load_raw_image(0).shape)
+        if resolution is not None and (raw_shape[2] != resolution or raw_shape[3] != resolution):
+            raise IOError("Image files do not match the specified resolution")
+        super().__init__(name=name, raw_shape=raw_shape, **super_kwargs)
+        
+    @staticmethod
+    def _file_ext(fname):
+        return os.path.splitext(fname)[1].lower()
+
+    def _get_zipfile(self):
+        assert self._type == "zip"
+        if self._zipfile is None:
+            self._zipfile = zipfile.ZipFile(self._path)
+        return self._zipfile
+
+    def _open_file(self, fname):
+        if self._type == "dir":
+            return open(os.path.join(self._path, fname), "rb")
+        if self._type == "zip":
+            return self._get_zipfile().open(fname, "r")
+        return None
+
+    def close(self):
+        try:
+            if self._zipfile is not None:
+                self._zipfile.close()
+        finally:
+            self._zipfile = None
+
+    def __getstate__(self):
+        return dict(super().__getstate__(), _zipfile=None)
+
+    def _get_raw_labels(self):
+        return self.labels
+
+    def get_label(self, idx):
+        fname = self._image_fnames[self._raw_idx[idx]]
+        label = self.labels[os.path.basename(fname).split('.')[0]]
+        label = np.array(label)
+        if self._xflip[idx] == 1:
+            flipped_pose = flip_yaw(label[:16].reshape(4, 4)).reshape(-1)
+            label[:16] = flipped_pose
+        return label.copy()
+    
+    # def _load_raw_image(self, raw_idx):
+    #     fname = self._image_fnames[raw_idx]
+    #     mask_name = os.path.join(self.mask_images, os.path.basename(fname).split(".")[0] + ".npy")
+
+    #     with self._open_file(fname) as f:
+    #         image = np.load(f)
+    #     with self._open_file(mask_name) as f:
+    #         mask_image = np.load(f)
+    #         mask_image = mask_image[:, :, np.newaxis]  # HW => HWC
+    #     if self.rand_background:
+    #         bg = np.ones_like(image)
+    #         bg[..., 0] = np.random.randint(low=0, high=255)
+    #         bg[..., 1] = np.random.randint(low=0, high=255)
+    #         bg[..., 2] = np.random.randint(low=0, high=255)
+    #     else:
+    #         bg = np.ones_like(image) * 255
+    #     image = (mask_image * image + (1 - mask_image) * bg).astype(np.uint8)
+        
+    #     image = cv2.resize(image, (512, 512), interpolation=cv2.INTER_LINEAR)
+
+    #     image = image.transpose(2, 0, 1)  # HWC => CHW
+    #     return image
+    
+    def _load_raw_image(self, raw_idx):
+        fname = self._image_fnames[raw_idx]
+        mask_name = os.path.join(self.mask_images, os.path.basename(fname).split(".")[0] + ".npy")
+
+        with self._open_file(fname) as f:
+            image = np.load(f)
+        with self._open_file(mask_name) as f:
+            mask_image = np.load(f)
+            
+        image = cv2.resize(image, (512, 512), interpolation=cv2.INTER_LINEAR)
+        mask_image = cv2.resize(mask_image, (512, 512), interpolation=cv2.INTER_LINEAR)
+        mask_image = mask_image[:, :, np.newaxis]  # HW => HWC
+        
+        if self.rand_background:
+            bg = np.ones_like(image)
+            bg[..., 0] = np.random.randint(low=0, high=255)
+            bg[..., 1] = np.random.randint(low=0, high=255)
+            bg[..., 2] = np.random.randint(low=0, high=255)
+        else:
+            bg = np.ones_like(image) * 255
+        image = (mask_image * image + (1 - mask_image) * bg).astype(np.uint8)
+        
+        # image = image[150:800, 187:-187]
+
+        image = image.transpose(2, 0, 1)  # HWC => CHW
+        return image
+    
+    def _load_raw_labels(self):
+        camera_labels = {}
+        camera_path = "/data1/datasets/synthesis_ai/labels_alvaro"
+        
+        for cur_subject_id in self.subjects_ids:
+            for cur_expression in self.expressions:
+                for cur_azimuth in self.azimuth:
+                    for cur_theta in self.theta:
+                        
+                        label_path = os.path.join(
+                            camera_path,
+                            "subject_{:01d}".format(cur_subject_id),
+                            cur_expression,
+                            "subject_{:01d}__{}__azimuth_{:01d}__theta_{:01d}.json".format(cur_subject_id, cur_expression, cur_azimuth, cur_theta),
+                        )
+                        with open(label_path, "r") as f:
+                            cur_label = json.load(f)
+
+                        cur_extrinsics = np.concatenate(
+                            [
+                                np.array(cur_label["M"], dtype=np.float32),
+                                np.array([[0, 0, 0, 1]], dtype=np.float32),  # Add identity quaternion
+                            ]
+                        )
+                        # Convert from World2Cam to Cam2World
+                        cur_extrinsics = np.linalg.inv(cur_extrinsics)
+                        
+                        #Normalize intrinsics
+                        intrinsics = np.array(cur_label["K"], dtype=np.float32)
+                        intrinsics[:2] /= 1024
+
+                        prepared_label = np.concatenate(
+                            [
+                                cur_extrinsics.flatten(),
+                                intrinsics.flatten()
+                            ]
+                        )
+                        camera_labels["subject_{:01d}__{}__azimuth_{:01d}__theta_{:01d}".format(cur_subject_id, cur_expression, cur_azimuth, cur_theta)
+                        ] = prepared_label
+        return camera_labels
+
+"""
+This dataset is for test_4
+"""
+class ImageFolderDataset3(Dataset):
+    def __init__(
+        self,
+        path,
+        resolution=None,
+        camera_sample_mode=None,
+        rand_background=True,
+        **super_kwargs,
+    ):
+        self._path = path
+        self._zipfile = None
+        self.mask_path = os.path.join(os.path.dirname(path), "mask")
+        self.rand_background = rand_background
+
+        self.mask_images = "/data1/datasets/dataset_alvaro/segmentation/synthesisai"
+        # self.mask_images = "/data1/datasets/dataset_alvaro/segmentation/synthesisai_face"
+        # self.theta = [theta for theta in range(0, 360, 30)]
+        # self.theta = [theta for theta in range(0, 120, 30)] + [theta for theta in range(270, 360, 30)]
+        self.theta = [theta for theta in range(0, 90, 30)] + [theta for theta in range(300, 360, 30)]
+        # self.theta = [0]
+        self.azimuth = [0, 25, 335]
+        # self.azimuth = [0]
+        self.expressions = ["neutral"]
+        # self.expressions = ["neutral", "happy", "scared"]
+        self.subjects_ids = [1]
+        # self.subjects_ids = [1, 2, 3, 4]
+        # self.subjects_ids = [idx for idx in range(1, 301)]
+
+        self._image_fnames = []
+        for cur_subject_id in self.subjects_ids:
+            for cur_expression in self.expressions:
+                for cur_azimuth in self.azimuth:
+                    for cur_theta in self.theta:
+                        self._image_fnames.append(
+                            os.path.join(
+                                self._path,
+                                "subject_{:01d}__{}__azimuth_{:01d}__theta_{:01d}.npy".format(cur_subject_id, cur_expression, cur_azimuth, cur_theta),
+                            )
+                        )
+                        
+        self._type = "dir"
+        
+        self.labels = self._load_raw_labels()
+        all_labels = np.array([label for label in self.labels.values()])
+        self._raw_labels_std = all_labels.std(0)
+
+        PIL.Image.init()
+
+        print("Images in directory:", len(self._image_fnames))
+
+        if len(self._image_fnames) == 0:
+            raise IOError("No image files found in the specified path")
+         
+        name = os.path.splitext(os.path.basename(self._path))[0]
+        raw_shape = [len(self._image_fnames)] + list(self._load_raw_image(0).shape)
+        if resolution is not None and (raw_shape[2] != resolution or raw_shape[3] != resolution):
+            raise IOError("Image files do not match the specified resolution")
+        super().__init__(name=name, raw_shape=raw_shape, **super_kwargs)
+        
+
+    @staticmethod
+    def _file_ext(fname):
+        return os.path.splitext(fname)[1].lower()
+
+    def _get_zipfile(self):
+        assert self._type == "zip"
+        if self._zipfile is None:
+            self._zipfile = zipfile.ZipFile(self._path)
+        return self._zipfile
+
+    def _open_file(self, fname):
+        if self._type == "dir":
+            return open(os.path.join(self._path, fname), "rb")
+        if self._type == "zip":
+            return self._get_zipfile().open(fname, "r")
+        return None
+
+    def close(self):
+        try:
+            if self._zipfile is not None:
+                self._zipfile.close()
+        finally:
+            self._zipfile = None
+
+    def __getstate__(self):
+        return dict(super().__getstate__(), _zipfile=None)
+
+    def _get_raw_labels(self):
+        return self.labels
+
+    def get_label(self, idx):
+        fname = self._image_fnames[self._raw_idx[idx]]
+        label = self.labels[os.path.basename(fname).split('.')[0]]
+        label = np.array(label)
+        if self._xflip[idx] == 1:
+            flipped_pose = flip_yaw(label[:16].reshape(4, 4)).reshape(-1)
+            label[:16] = flipped_pose
+        return label.copy()
+    
+    def _load_raw_image(self, raw_idx):
+        fname = self._image_fnames[raw_idx]
+        mask_name = os.path.join(self.mask_images, os.path.basename(fname).split(".")[0] + ".npy")
+
+        with self._open_file(fname) as f:
+            image = np.load(f)
+        with self._open_file(mask_name) as f:
+            mask_image = np.load(f)
+            
+        image = cv2.resize(image, (512, 512), interpolation=cv2.INTER_LINEAR)
+        mask_image = cv2.resize(mask_image, (512, 512), interpolation=cv2.INTER_LINEAR)
+        mask_image = mask_image[:, :, np.newaxis]  # HW => HWC
+        
+        if self.rand_background:
+            bg = np.ones_like(image)
+            bg[..., 0] = np.random.randint(low=0, high=255)
+            bg[..., 1] = np.random.randint(low=0, high=255)
+            bg[..., 2] = np.random.randint(low=0, high=255)
+        else:
+            bg = np.ones_like(image) * 255
+        image = (mask_image * image + (1 - mask_image) * bg).astype(np.uint8)
+        
+        # image = image[150:800, 187:-187]
+
+        image = image.transpose(2, 0, 1)  # HWC => CHW
+        return image
+
+    def _load_raw_labels(self):
+        camera_labels = {}
+        camera_path = "/data1/datasets/synthesis_ai/labels_alvaro"
+        
+        for cur_subject_id in self.subjects_ids:
+            for cur_expression in self.expressions:
+                for cur_azimuth in self.azimuth:
+                    for cur_theta in self.theta:
+                        
+                        label_path = os.path.join(
+                            camera_path,
+                            "subject_{:01d}".format(cur_subject_id),
+                            cur_expression,
+                            "subject_{:01d}__{}__azimuth_{:01d}__theta_{:01d}.json".format(cur_subject_id, cur_expression, cur_azimuth, cur_theta),
+                        )
+                        with open(label_path, "r") as f:
+                            cur_label = json.load(f)
+
+                        cur_extrinsics = np.concatenate(
+                            [
+                                np.array(cur_label["M"], dtype=np.float32),
+                                np.array([[0, 0, 0, 1]], dtype=np.float32),  # Add identity quaternion
+                            ]
+                        )
+                        # Convert from World2Cam to Cam2World
+                        cur_extrinsics = np.linalg.inv(cur_extrinsics)
+                        
+                        #Normalize intrinsics
+                        intrinsics = np.array(cur_label["K"], dtype=np.float32)
+                        intrinsics[:2] /= 1024
+
+                        prepared_label = np.concatenate(
+                            [
+                                cur_extrinsics.flatten(),
+                                intrinsics.flatten()
+                            ]
+                        )
+                        camera_labels["subject_{:01d}__{}__azimuth_{:01d}__theta_{:01d}".format(cur_subject_id, cur_expression, cur_azimuth, cur_theta)
+                        ] = prepared_label
+        return camera_labels
+
+"""
+This dataset is for test_5
+"""
+class ImageFolderDataset4(Dataset):
+    def __init__(
+        self,
+        path,
+        resolution=None,
+        camera_sample_mode=None,
+        rand_background=True,
+        **super_kwargs,
+    ):
+        self._path = path
+        self._zipfile = None
+        self.mask_path = os.path.join(os.path.dirname(path), "mask")
+        self.rand_background = rand_background
+
+        self.mask_images = "/data1/datasets/dataset_alvaro/segmentation/synthesisai_face"
+        # self.theta = [theta for theta in range(0, 360, 30)]
+        # self.theta = [theta for theta in range(0, 120, 30)] + [theta for theta in range(270, 360, 30)]
+        # self.theta = [theta for theta in range(0, 90, 30)] + [theta for theta in range(300, 360, 30)]
+        self.theta = [0]
+        # self.azimuth = [0, 25, 335]
+        self.azimuth = [0]
+        self.expressions = ["neutral"]
+        # self.expressions = ["neutral", "happy", "scared"]
+        self.subjects_ids = [40]
+        # self.subjects_ids = [1, 2, 3, 4]
+        # self.subjects_ids = [idx for idx in range(1, 301)]
+
+        self.x_0 = 212
+        self.y_0 = 175
+        self.x_t = 812
+        self.y_t = 775
+
+        self._image_fnames = []
+        for cur_subject_id in self.subjects_ids:
+            for cur_expression in self.expressions:
+                for cur_azimuth in self.azimuth:
+                    for cur_theta in self.theta:
+                        self._image_fnames.append(
+                            os.path.join(
+                                self._path,
+                                "subject_{:01d}__{}__azimuth_{:01d}__theta_{:01d}.npy".format(cur_subject_id, cur_expression, cur_azimuth, cur_theta),
+                            )
+                        )
+                        
+        self._type = "dir"
+        
+        # self.image = self._load_raw_image_predefined(raw_idx=0)
+        
+        self.labels = self._load_raw_labels()
+        all_labels = np.array([label for label in self.labels.values()])
+        self._raw_labels_std = all_labels.std(0)
+
+        PIL.Image.init()
+
+        print("Images in directory:", len(self._image_fnames))
+
+        if len(self._image_fnames) == 0:
+            raise IOError("No image files found in the specified path")
+         
+        name = os.path.splitext(os.path.basename(self._path))[0]
+        raw_shape = [len(self._image_fnames)] + list(self._load_raw_image(0).shape)
+        if resolution is not None and (raw_shape[2] != resolution or raw_shape[3] != resolution):
+            raise IOError("Image files do not match the specified resolution")
+        super().__init__(name=name, raw_shape=raw_shape, **super_kwargs)
+        # Removing flip data augmentation
+        self._xflip = np.zeros_like(self._xflip, dtype=np.uint8)
+        
+
+    @staticmethod
+    def _file_ext(fname):
+        return os.path.splitext(fname)[1].lower()
+
+    def _get_zipfile(self):
+        assert self._type == "zip"
+        if self._zipfile is None:
+            self._zipfile = zipfile.ZipFile(self._path)
+        return self._zipfile
+
+    def _open_file(self, fname):
+        if self._type == "dir":
+            return open(os.path.join(self._path, fname), "rb")
+        if self._type == "zip":
+            return self._get_zipfile().open(fname, "r")
+        return None
+
+    def close(self):
+        try:
+            if self._zipfile is not None:
+                self._zipfile.close()
+        finally:
+            self._zipfile = None
+
+    def __getstate__(self):
+        return dict(super().__getstate__(), _zipfile=None)
+
+    def _get_raw_labels(self):
+        return self.labels
+
+    def get_label(self, idx):
+        fname = self._image_fnames[self._raw_idx[idx]]
+        label = self.labels[os.path.basename(fname).split('.')[0]]
+        label = np.array(label)
+        if self._xflip[idx] == 1:
+            flipped_pose = flip_yaw(label[:16].reshape(4, 4)).reshape(-1)
+            label[:16] = flipped_pose
+        return label.copy()
+    
+    # def _load_raw_image(self, raw_idx):
+    #     return self.image
+    
+    def _load_raw_image(self, raw_idx):
+        fname = self._image_fnames[raw_idx]
+        mask_name = os.path.join(self.mask_images, os.path.basename(fname).split(".")[0] + ".npy")
+
+        with self._open_file(fname) as f:
+            image = np.load(f)
+        with self._open_file(mask_name) as f:
+            mask_image = np.load(f)
+        
+        image = image[self.y_0:self.y_t, self.x_0:self.x_t]
+        mask_image = mask_image[self.y_0:self.y_t, self.x_0:self.x_t]
+        
+        image = cv2.resize(image, (512, 512), interpolation=cv2.INTER_LINEAR)
+        mask_image = cv2.resize(mask_image, (512, 512), interpolation=cv2.INTER_LINEAR)
+        mask_image = mask_image[:, :, np.newaxis]  # HW => HWC
+        
+        if self.rand_background:
+            bg = np.ones_like(image)
+            bg[..., 0] = np.random.randint(low=0, high=255)
+            bg[..., 1] = np.random.randint(low=0, high=255)
+            bg[..., 2] = np.random.randint(low=0, high=255)
+        else:
+            bg = np.ones_like(image) * 255
+        image = (mask_image * image + (1 - mask_image) * bg).astype(np.uint8)
+        
+        image = image.transpose(2, 0, 1)  # HWC => CHW
+        return image
+
+    def _load_raw_labels(self):
+        camera_labels = {}
+        camera_path = "/data1/datasets/synthesis_ai/labels_alvaro"
+        
+        for cur_subject_id in self.subjects_ids:
+            for cur_expression in self.expressions:
+                for cur_azimuth in self.azimuth:
+                    for cur_theta in self.theta:
+                        
+                        label_path = os.path.join(
+                            camera_path,
+                            "subject_{:01d}".format(cur_subject_id),
+                            cur_expression,
+                            "subject_{:01d}__{}__azimuth_{:01d}__theta_{:01d}.json".format(cur_subject_id, cur_expression, cur_azimuth, cur_theta),
+                        )
+                        with open(label_path, "r") as f:
+                            cur_label = json.load(f)
+
+                        cur_extrinsics = np.concatenate(
+                            [
+                                np.array(cur_label["M"], dtype=np.float32),
+                                np.array([[0, 0, 0, 1]], dtype=np.float32),  # Add identity quaternion
+                            ]
+                        )
+                        # Convert from World2Cam to Cam2World
+                        cur_extrinsics = np.linalg.inv(cur_extrinsics)
+                        
+                        #Normalize intrinsics
+                        intrinsics = np.array(cur_label["K"], dtype=np.float32)
+                        
+                        intrinsics[0, 0] /= (self.x_t - self.x_0)
+                        intrinsics[1, 1] /= (self.y_t - self.y_0)
+                        
+                        intrinsics[0, 2] = (intrinsics[0, 2] - self.x_0) / (self.x_t - self.x_0)
+                        intrinsics[1, 2] = (intrinsics[1, 2] - self.y_0) / (self.y_t - self.y_0)
+                        
+                        prepared_label = np.concatenate(
+                            [
+                                cur_extrinsics.flatten(),
+                                intrinsics.flatten()
+                            ]
+                        )
+                        camera_labels["subject_{:01d}__{}__azimuth_{:01d}__theta_{:01d}".format(cur_subject_id, cur_expression, cur_azimuth, cur_theta)
+                        ] = prepared_label
+        return camera_labels
+    
+    
+"""
+This dataset is for Nersemble
+"""
+class ImageFolderDatasetNersemble(Dataset):
+    def __init__(
+        self,
+        path,
+        resolution=None,
+        camera_sample_mode=None,
+        rand_background=True,
+        **super_kwargs,
+    ):
+        self._path = "/data/hs_generative_model_data/NeRSemble/data"
+        self._zipfile = None
+        self.mask_path = os.path.join(os.path.dirname(path), "mask")
+        self.rand_background = rand_background
+
+        self.subject_id = "187"
+
+        # self._image_fnames = read_file(
+        #     os.path.join(
+        #         self._path,
+        #         "nersemble_paths.txt"
+        #     )
+        # )
+        self._image_fnames = [
+            f"{self.subject_id}/extra_sequences/EMO-2-surprise+fear/frame_00006/images-2fps/cam_222200037.jpg"
+        ]
+
+        self.x_0 = 0
+        self.y_0 = 350
+        self.x_t = 2200
+        self.y_t = 2908
+        
+        self._type = "dir"
+
+        self.labels = self._load_raw_labels()
+        all_labels = np.array([label for label in self.labels.values()])
+        self._raw_labels_std = all_labels.std(0)
+
+        PIL.Image.init()
+
+        print("Images in directory:", len(self._image_fnames))
+
+        if len(self._image_fnames) == 0:
+            raise IOError("No image files found in the specified path")
+         
+        name = os.path.splitext(os.path.basename(self._path))[0]
+        raw_shape = [len(self._image_fnames)] + list(self._load_raw_image(0).shape)
+        if resolution is not None and (raw_shape[2] != resolution or raw_shape[3] != resolution):
+            raise IOError("Image files do not match the specified resolution")
+        super().__init__(name=name, raw_shape=raw_shape, **super_kwargs)
+        # Removing flip data augmentation
+        self._xflip = np.zeros_like(self._xflip, dtype=np.uint8)
+        
+
+    @staticmethod
+    def _file_ext(fname):
+        return os.path.splitext(fname)[1].lower()
+
+    def _get_zipfile(self):
+        assert self._type == "zip"
+        if self._zipfile is None:
+            self._zipfile = zipfile.ZipFile(self._path)
+        return self._zipfile
+
+    def _open_file(self, fname):
+        if self._type == "dir":
+            return open(os.path.join(self._path, fname), "rb")
+        if self._type == "zip":
+            return self._get_zipfile().open(fname, "r")
+        return None
+
+    def close(self):
+        try:
+            if self._zipfile is not None:
+                self._zipfile.close()
+        finally:
+            self._zipfile = None
+
+    def __getstate__(self):
+        return dict(super().__getstate__(), _zipfile=None)
+
+    def _get_raw_labels(self):
+        return self.labels
+
+    def get_label(self, idx):
+        fname = self._image_fnames[self._raw_idx[idx]]
+        label = self.labels[os.path.basename(fname).split('.')[0]]
+        label = np.array(label)
+        if self._xflip[idx] == 1:
+            flipped_pose = flip_yaw(label[:16].reshape(4, 4)).reshape(-1)
+            label[:16] = flipped_pose
+        return label.copy()
+
+    def _load_raw_image(self, raw_idx):
+        fname = os.path.join(
+            self._path,
+            self._image_fnames[raw_idx]
+        )
+        # mask_name = os.path.join(self.mask_images, os.path.basename(fname).split(".")[0] + ".npy")
+
+        image = np.array(read_file(file_path=fname))
+        # with self._open_file(mask_name) as f:
+        #     mask_image = np.load(f)
+        
+        image = image[self.y_0:self.y_t, self.x_0:self.x_t]
+        # mask_image = mask_image[self.y_0:self.y_t, self.x_0:self.x_t]
+        
+        image = cv2.resize(image, (512, 512), interpolation=cv2.INTER_LINEAR)
+        # mask_image = cv2.resize(mask_image, (512, 512), interpolation=cv2.INTER_LINEAR)
+        # mask_image = mask_image[:, :, np.newaxis]  # HW => HWC
+        
+        # if self.rand_background:
+        #     bg = np.ones_like(image)
+        #     bg[..., 0] = np.random.randint(low=0, high=255)
+        #     bg[..., 1] = np.random.randint(low=0, high=255)
+        #     bg[..., 2] = np.random.randint(low=0, high=255)
+        # else:
+        #     bg = np.ones_like(image) * 255
+        # image = (mask_image * image + (1 - mask_image) * bg).astype(np.uint8)
+        
+        image = image.transpose(2, 0, 1)  # HWC => CHW
+        return image
+
+    def _load_raw_labels(self):
+        camera_path = os.path.join(
+            self._path,
+            f"{self.subject_id}/camera_params.json"
+        )
+        
+        cur_label = read_file(
+            file_path=camera_path
+        )
+        
+        cur_extrinsics = np.array(cur_label["world_2_cam"]["222200037"], dtype=np.float32)
+        # Convert from World2Cam to Cam2World
+        cur_extrinsics = np.linalg.inv(cur_extrinsics)
+        
+        #Normalize intrinsics
+        intrinsics = np.array(cur_label["intrinsics"], dtype=np.float32)
+        intrinsics[:1] /= 2200
+        intrinsics[1:2] /= 3208
+
+        prepared_label = np.concatenate(
+            [
+                cur_extrinsics.flatten(),
+                intrinsics.flatten()
+            ]
+        )
+        camera_labels = {
+            "cam_222200037":
+                prepared_label
+        }
+        return camera_labels

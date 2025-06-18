@@ -34,5 +34,6 @@ test_7: Using ImageFolderDataset3, resuming from 512 pretrained weights, only 1 
     test_7_3: glr:0.00001 dlr: 0.00001 img_snap=25 4 GPUs, theta=0,30,60,300,330, azimuth=0,25,335 ------- 40s per kimgs, STILL SPACE FOR IMPROVEMENTS
 
 Date:06/17
-test_8: Using ImageFolderDataset2 (all subj and all views) (also new _load_raw_image function), and from scratch.
+test_8: Using ImageFolderDataset2 (all subj and all views), and from scratch
     test_8_1: glr:0.00005 dlr: 0.00005 img_snap=25 4 GPUs (Hilbert tmux 1)
+    test_8_2: glr:0.0001 dlr: 0.0001 img_snap=25 4 GPUs

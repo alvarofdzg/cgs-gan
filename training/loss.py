@@ -123,6 +123,7 @@ class StyleGAN2Loss(Loss):
                 logger.add("Loss", "G_loss", loss_Gmain)
 
             with torch.autograd.profiler.record_function('Gmain_backward'):
+                # ((loss_Gmain).mean().mul(gain) + dist_center.mean() * self.coeffs['center_dists'] + dist * self.coeffs['knn_dists']).backward()
                 loss_G = (loss_Gmain).mean().mul(gain) + dist_center.mean() * self.coeffs['center_dists'] + dist * self.coeffs['knn_dists']
                 loss_G.backward()
                 logger.add("Loss", "G_loss_backward", loss_G)
@@ -146,6 +147,7 @@ class StyleGAN2Loss(Loss):
                 logger.add("Loss_Sign", "signs_fake", gen_logits.sign())
                 
             with torch.autograd.profiler.record_function('Dgen_backward'):
+                # (loss_Dgen).mean().mul(gain).backward()
                 loss_Dgen_backward = (loss_Dgen).mean().mul(gain)
                 loss_Dgen_backward.backward() # Do not use contrastive loss for D_gen
                 logger.add("Loss", "Dgen_loss_backward", loss_Dgen_backward)
@@ -179,6 +181,7 @@ class StyleGAN2Loss(Loss):
                     logger.add("Reg", "r1_penalty", r1_penalty)
 
             with torch.autograd.profiler.record_function(name + '_backward'):
+                # (loss_Dreal + loss_Dr1).mean().mul(gain).backward()
                 loss_Dreal_Dr1 = (loss_Dreal + loss_Dr1).mean().mul(gain)
                 loss_Dreal_Dr1.backward()
                 clip_grad_norm_(self.D.parameters(), max_norm=5)

@@ -20,7 +20,7 @@ test_4: Using ImageFolderDataset3
 test_5: Using ImageFolderDataset4, do not sample in each iteration (code in training_loop:259-267 lines), use_multivew_reg=False
     test_5_1: glr:0.0001 dlr: 0.0001 Only 1 subject batch=4 batch-gpu=1 mbstd-group=1, img_snap=50 4 GPUs ------- tmux 1
 
-test_6: Using ImageFolderDataset2, resuming from 512 pretrained weights.
+test_6: Using ImageFolderDataset2 (all subjects and 0,30,60,300,330 views), resuming from 512 pretrained weights.
     test_6_1: glr:0.0025 dlr: 0.002 img_snap=1 4 GPUs
     test_6_2: glr:0.001 dlr: 0.001 batch=4 img_snap=10 4 GPUs ------- 40s per kimgs
     test_6_3: glr:0.0005 dlr: 0.0005 batch=4 img_snap=10 4 GPUs ------- 40s per kimgs
